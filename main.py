@@ -43,7 +43,7 @@ m_offdiag_n_pg_iter = 10
 m_diag_n_pg_iter = 10
 m_offdiag_pg_step_size = 1e-6
 m_diag_pg_step_size = 1e-6
-max_trace = 3
+max_trace = 5
 bun_pcl_s_denoised = optim.denoise_point_cloud(bun_pcl_s_noisy, n_patch, patch_size, n_patch_neighbor,
                                                n_iter, optim_M_iter, m_offdiag_n_block_iter, m_offdiag_n_pg_iter, m_diag_n_pg_iter,
                                                m_offdiag_pg_step_size, m_diag_pg_step_size,

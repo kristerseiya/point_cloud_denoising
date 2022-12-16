@@ -26,10 +26,11 @@ args = parser.parse_args()
 n_neighbor = 50
 
 bunny = o3d.data.BunnyMesh()
-bun_mesh = o3d.io.read_triangle_mesh(bunny.path)
-gt_mesh = bun_mesh
-gt_points = np.array(bun_mesh.vertices)
-pcd = bun_mesh.sample_points_poisson_disk(5000)
+gt_mesh = o3d.io.read_triangle_mesh(bunny.path)
+# knot_mesh = o3d.data.KnotMesh()
+# gt_mesh = o3d.io.read_triangle_mesh(knot_mesh.path)
+gt_points = np.array(gt_mesh.vertices)
+pcd = gt_mesh.sample_points_poisson_disk(5000)
 points = np.array(pcd.points)
 # points_noisy = points + np.random.randn(*(points.shape)) * args.sigma
 #
@@ -94,7 +95,14 @@ plt.scatter(project_dist, ortho_dist, s=0.1)
 
 plt.figure(2)
 plt.scatter(bin_val[:-1]+bin_incr, var_data)
-# plt.scatter(np.arange(100), np.arange(100), s=1)
+
+plt.figure(3)
+plt.subplot(1,3,1)
+plt.hist(data[20,:bin_count[20]], bins=100)
+plt.subplot(1,3,2)
+plt.hist(data[60,:bin_count[60]], bins=100)
+plt.subplot(1,3,3)
+plt.hist(data[90,:bin_count[90]], bins=100)
 plt.show()
 exit()
 # bun_pcl_s_denoised, _ = bun_pcl_s_denoised.remove_statistical_outlier(10, std_ratio=2)

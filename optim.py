@@ -34,9 +34,12 @@ def _project_M_diagonal_constraint(M, max_trace):
 def optimize_M_diagonal(init_M, feature_diff, point_dist, max_trace, step_size, n_iter):
 
     M = np.copy(init_M)
+    M_off = M - np.diag(np.diag(M))
     K = M.shape[0]
     feature_diff_2 = feature_diff**2
-    tmp1 = (feature_diff_2.T * point_dist)
+    point_dist_sub = np.exp( -np.sum((feature_diff @ M_off) * feature_diff,axis=1) ) * point_dist
+    tmp1 = (feature_diff_2.T * point_dist_sub)
+    # tmp1 = (feature_diff_2.T * point_dist)
 
     for it in range(n_iter):
         # print('diagonal {:d}/{:d}'.format(it2+1,n_pg_iter))
@@ -101,100 +104,7 @@ def optimize_M_offdiagonal(init_M, feature_diff, point_dist, max_trace, step_siz
 
     return M
 
-
-def denoise_point_cloud(noisy_pcl, n_patch, patch_size, n_patch_neighbor,
-                        n_iter, optim_M_iter, m_offdiag_n_block_iter, m_offdiag_n_pg_iter, m_diag_n_pg_iter,
-                        m_offdiag_pg_step_size, m_diag_pg_step_size,
-                        max_trace=3):
-
-    points = np.array(noisy_pcl.points)
-    M = np.eye(6) * max_trace / 6
-
-    for it in range(n_iter):
-        print('{:d}/{:d}'.format(it+1,n_iter))
-
-        # gamma= 0.2**(it+1) * (np.exp(1)-1)**(1-it-1)
-        gamma= 0.2**(it/2+1) * (np.exp(1)-1)**(1-(it+1)/2)
-
-        pcl = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points))
-        pcl.estimate_normals()
-        pcl.orient_normals_consistent_tangent_plane(10)
-
-        features = np.concatenate([points, pcl.normals], axis=1)
-        point_knn = geometry.compute_knn(points, patch_size)
-        n_point = len(points)
-
-        dpcl_idx = geometry.farthest_point_sampling(points, n_patch)
-        # dpcl = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points[dpcl_idx]))
-        patch_knn = geometry.compute_knn(points[dpcl_idx], n_patch)
-
-        sample_idx = np.zeros((n_patch, patch_size), dtype=int)                       # point index stored in patch index order
-        all_patches = np.zeros((n_patch, patch_size, 3))                              # patches stored in patch index order
-        feature_diff = np.zeros((n_patch, patch_size, n_patch_neighbor, 6))           # feature difference of pairs stored in patch index order
-        point_dist = np.zeros((n_patch, patch_size, n_patch_neighbor))                # point distance of pairs stored in patch index order
-        corres_idx = np.zeros((n_patch, patch_size, n_patch_neighbor), dtype=int)     # point index of pair stored in patch index order
-        points_graph = np.zeros((n_patch, patch_size, n_patch_neighbor), dtype=int)   # patch index of pair store in patch index order
-
-        for i in range(n_patch):
-            for j in range(patch_size):
-                sample_idx[i,j] = point_knn[dpcl_idx[i], j]
-                all_patches[i,j] = points[sample_idx[i,j]]
-
-        for i in range(n_patch):
-            patch = all_patches[i]
-            for k in range(n_patch_neighbor):
-                near_patch_idx = patch_knn[i,k]
-                near_patch = all_patches[near_patch_idx]
-                for j in range(patch_size):
-                    point = patch[j]
-                    idx = np.argmin(np.linalg.norm(near_patch - point, ord=2, axis=1))
-                    corres_idx[i,j,k] = sample_idx[near_patch_idx, idx]
-                    feature_diff[i,j,k] = features[sample_idx[i,j]] - features[corres_idx[i,j,k]]
-                    point_dist[i,j,k] = points[sample_idx[i,j]] @ points[corres_idx[i,j,k]]
-                    points_graph[i, j, k] = near_patch_idx*patch_size+idx
-
-        feature_diff_flat = np.reshape(feature_diff, (-1, 6))
-        point_dist_flat = np.reshape(point_dist, (-1))
-
-        print('start optimize M')
-        for it in range(optim_M_iter):
-            M = optimize_M_offdiagonal(M, feature_diff_flat, point_dist_flat, max_trace, m_offdiag_pg_step_size, m_offdiag_n_block_iter, m_offdiag_n_pg_iter)
-            M = optimize_M_diagonal(M, feature_diff_flat, point_dist_flat, max_trace, m_diag_pg_step_size, m_diag_n_pg_iter)
-
-        W_row_idx = np.kron( range(n_patch*patch_size), np.ones((n_patch_neighbor),dtype=int) )
-        W_col_idx = np.reshape(points_graph, (-1))
-        W_data = np.exp( - np.sum((feature_diff_flat @ M) * feature_diff_flat, axis=1) )
-        W = sparse.csr_matrix((W_data, (W_row_idx, W_col_idx)), shape=(n_patch*patch_size, n_patch*patch_size))
-
-        D = sparse.diags(W @ np.ones(n_patch*patch_size), 0)
-        L = D - W
-
-        S_row_idx = range(n_patch*patch_size)
-        S_col_idx = np.reshape(sample_idx, (-1))
-        S_data = np.ones((n_patch*patch_size))
-        S = sparse.csr_matrix((S_data, (S_row_idx, S_col_idx)), shape=(n_patch*patch_size, n_point))
-
-        C = np.kron(points[dpcl_idx], np.ones((patch_size,1)))
-
-        StL = S.T @ L
-        StLS = StL @ S
-        Ax = gamma * StLS + sparse.diags(np.ones((n_point)), 0)
-        bx = points[:,0] + gamma * StL @ C[:,0]
-        Ay = gamma * StLS + sparse.diags(np.ones((n_point)), 0)
-        by = points[:,1] + gamma * StL @ C[:,1]
-        Az = gamma * StLS + sparse.diags(np.ones((n_point)), 0)
-        bz = points[:,2] + gamma * StL @ C[:,2]
-
-        points_x = LSQR(Ax, bx)[0]
-        points_y = LSQR(Ay, by)[0]
-        points_z = LSQR(Az, bz)[0]
-
-        points = np.stack([points_x, points_y, points_z], axis=1)
-
-    return o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points))
-
-
-def denoise_point_cloud_2(noisy_points, n_patch, patch_size, n_patch_neighbor,
+def denoise_point_cloud(noisy_points, n_patch, patch_size, n_patch_neighbor,
                         n_iter, optim_M_iter, m_offdiag_n_block_iter, m_offdiag_n_pg_iter, m_diag_n_pg_iter,
                         m_offdiag_pg_step_size, m_diag_pg_step_size,
                         max_trace=3, gamma=None, ground_truth=None):
@@ -239,10 +149,12 @@ def denoise_point_cloud_2(noisy_points, n_patch, patch_size, n_patch_neighbor,
 
         for i in range(n_patch):
             sample_idx[i,0] = patch_idx[i]
-            all_patches[i,0] = points[patch_idx[i]]
+            # all_patches[i,0] = points[patch_idx[i]]
+            all_patches[i,0] = np.zeros((3))
+            patch_center = points[patch_idx[i]]
             for j in range(1, patch_size):
                 sample_idx[i,j] = neighbor_idx[patch_idx[i], j-1]
-                all_patches[i,j] = points[sample_idx[i,j]] - points[sample_idx[i,0]]
+                all_patches[i,j] = points[sample_idx[i,j]] - patch_center
 
         for i in range(n_patch):
             patch = all_patches[i]
@@ -256,7 +168,8 @@ def denoise_point_cloud_2(noisy_points, n_patch, patch_size, n_patch_neighbor,
                     feature_diff[i,j,k,:3] = points[sample_idx[i,j]] - points[corres_idx]
                     normal_dir = np.sign(normals[sample_idx[i,j]] @ normals[corres_idx])
                     feature_diff[i,j,k,3:] = normals[sample_idx[i,j]] - normal_dir * normals[corres_idx]
-                    point_dist[i,j,k] = np.linalg.norm(near_patch[idx] - point, ord=2)**2
+                    # point_dist[i,j,k] = np.linalg.norm(near_patch[idx] - point, ord=2)**2
+                    point_dist[i,j,k] = np.linalg.norm(points[sample_idx[i,j]] - points[sample_idx[near_patch_idx,idx]], ord=2)**2
                     sample_graph[i,j,k] = near_patch_idx*patch_size+idx
 
         feature_diff_flat = np.reshape(feature_diff, (-1, 6))
@@ -304,8 +217,9 @@ def denoise_point_cloud_2(noisy_points, n_patch, patch_size, n_patch_neighbor,
             error_distance = np.mean(error_distance)
             print('MSE: {:.3e}'.format(error_distance))
 
+        # print(M)
 
-    return points
+    return points, M
 
 
 def my_denoise_algo(noisy_points, n_iter, sample_rate, n_neighbor, sigma_d, sigma_n, lambd, ground_truth=None):
@@ -315,8 +229,11 @@ def my_denoise_algo(noisy_points, n_iter, sample_rate, n_neighbor, sigma_d, sigm
     n_point = points.shape[0]
     normals = np.random.randn(*points.shape)
     n_sample = int(sample_rate * n_point)
-    lambd_arr = 50*np.exp(-np.linspace(0,50,101))
+    # lambd_arr = 50*np.exp(-np.linspace(0,50,101))
     # lambd_arr = np.array([50]*101)
+    if np.isscalar(lambd):
+        lambd = np.array([lambd]*n_iter)
+    lambd_arr = lambd
 
     if ground_truth is not None:
         grouth_truth_kdtree = scipy.spatial.cKDTree(ground_truth, leafsize=16)
@@ -334,8 +251,7 @@ def my_denoise_algo(noisy_points, n_iter, sample_rate, n_neighbor, sigma_d, sigm
         point_kdtree = scipy.spatial.cKDTree(points)
 
         print('computing normals')
-        # neighbor_idx, neighbor_dist, neighbor_count = geometry.compute_neighbors(points, n_neighbor, kdtree=point_kdtree)
-        # normals = geometry.compute_normals(points, neighbor_idx, init_normals=normals)
+
         for i, i_point in enumerate(points):
             neighbor_info = point_kdtree.query(i_point, n_neighbor+1)
             neighbor_idx[i] = neighbor_info[1][1:]
@@ -346,7 +262,6 @@ def my_denoise_algo(noisy_points, n_iter, sample_rate, n_neighbor, sigma_d, sigm
             neighbor_mu = np.copy(i_point)
             X = neighbor_points - neighbor_mu
             _, eigvecs = LOBPCG(X.T @ X, np.reshape(normals[i], (3,1)), largest=False)
-            # _, eigvecs = LOBPCG(X.T @ X, np.random.randn(3,1), largest=False)
             normals[i] = eigvecs[:,0] / np.linalg.norm(eigvecs[:,0], ord=2)
 
         sample_idx = np.random.choice(range(n_point), size=(n_sample), replace=False)
@@ -368,6 +283,7 @@ def my_denoise_algo(noisy_points, n_iter, sample_rate, n_neighbor, sigma_d, sigm
             i_neighbor_ortho_dist = np.abs( (neighbor_points - center_point) @ i_normal )
             i_neighbor_sigma = np.linalg.norm(neighbor_points-center_point, ord=2, axis=1) * sigma_d + 1e-9
             neighbor_weights = 1 / i_neighbor_sigma * np.exp( - 0.5 * (i_neighbor_ortho_dist / i_neighbor_sigma)**2 )
+            # neighbor_weights = 1 / i_neighbor_sigma * np.exp( - 0.5 * np.abs(i_neighbor_ortho_dist / i_neighbor_sigma) )
             # neighbor_weights = np.ones((n_neighbor))
             total_weights[i_neighbor_idx] += neighbor_weights
             directions[i_neighbor_idx] += np.expand_dims( neighbor_weights * ( (neighbor_points - center_point) @ i_normal ), axis=1) * np.expand_dims(i_normal, axis=0)
@@ -384,12 +300,12 @@ def my_denoise_algo(noisy_points, n_iter, sample_rate, n_neighbor, sigma_d, sigm
         # points = points - directions
 
         lambd = lambd_arr[it]
-        print(lambd)
         noisy_patch_mean = np.zeros((n_point, 3))
         for i in range(n_point):
             i_point = points[i]
-            noisy_patch_idx = noisy_point_kdtree.query(i_point, 10)[1]
+            noisy_patch_idx = noisy_point_kdtree.query(i_point, n_neighbor)[1]
             noisy_patch_mean[i] = np.mean(noisy_points[noisy_patch_idx], axis=0)
+            # noisy_patch_mean[i] = noisy_points[noisy_patch_idx]
         # points = (noisy_points + lambd * (points - directions)) / (1 + lambd)
         points = (noisy_patch_mean + lambd * (points - directions)) / (1 + lambd)
 

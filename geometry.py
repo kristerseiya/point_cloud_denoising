@@ -147,9 +147,10 @@ def surface_reconstruction(pcd, method='poisson'):
         pcd.orient_normals_consistent_tangent_plane(100)
 
     if method == 'poisson':
-        rec_mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=12)
+        rec_mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
         densities = np.asarray(densities)
-        vertices_to_remove = densities < np.quantile(densities, 0.008)
+        # vertices_to_remove = densities < np.quantile(densities, 0.008)
+        vertices_to_remove = densities < np.quantile(densities, 0.0005)
         rec_mesh.remove_vertices_by_mask(vertices_to_remove)
     elif method == 'alpha':
         tetra_mesh, pt_map = o3d.geometry.TetraMesh.create_from_point_cloud(pcd)
